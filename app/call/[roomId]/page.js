@@ -1,54 +1,82 @@
-"use client"
-import { useEffect, useRef, useState } from "react";
+"use client"import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import Peer from "simple-peer";
-import { useRouter, useParams } from "next/navigation";
+import { database, ref, onValue, set, push } from "../firebase"; // Firebase utilities
 
 export default function VideoCall() {
   const userVideo = useRef();
   const partnerVideo = useRef();
   const peerRef = useRef();
   const router = useRouter();
-  const { roomId } = useParams();  // Get roomId from useParams
+  const [roomId, setRoomId] = useState(null); // Local state for roomId
+  const [error, setError] = useState(null);
 
   useEffect(() => {
-    if (roomId) {
-      console.log("Room ID:", roomId);  // Debugging line
+    if (router.query.roomId) {
+      setRoomId(router.query.roomId); // Set roomId from query when available
     }
-  }, [roomId]);
+  }, [router.query.roomId]);
 
   useEffect(() => {
-    if (!roomId) return;  // Wait until roomId is set
+    if (!roomId) return;
 
-    if (typeof window !== "undefined" && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      // Access the user's webcam and mic
-      navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then((stream) => {
+    const roomRef = ref(database, `rooms/${roomId}`);
+
+    // Access the user's webcam and mic
+    navigator.mediaDevices
+      .getUserMedia({ video: true, audio: true })
+      .then((stream) => {
         userVideo.current.srcObject = stream;
 
-        // Initialize peer connection
         const peer = new Peer({
-          initiator: true,
+          initiator: false,
           trickle: false,
           stream: stream,
         });
 
-        peer.on("signal", (data) => {
-          // Send signal data to the server
+        peer.on("signal", (signal) => {
+          // Save signal data to Firebase
+          const signalRef = push(ref(database, `rooms/${roomId}/signals`));
+          set(signalRef, { signal, type: "offer" });
         });
 
-        peer.on("stream", (stream) => {
-          partnerVideo.current.srcObject = stream;
+        peer.on("stream", (partnerStream) => {
+          partnerVideo.current.srcObject = partnerStream;
         });
 
         peerRef.current = peer;
-      }).catch((error) => {
-        console.error("Error accessing media devices.", error);
-        alert("Error accessing media devices: " + error.message);
+
+        // Listen for signal data from Firebase
+        onValue(ref(database, `rooms/${roomId}/signals`), (snapshot) => {
+          const signals = snapshot.val();
+          if (signals) {
+            Object.values(signals).forEach(({ signal, type }) => {
+              if (type === "offer" && !peer.initiator) {
+                peer.signal(signal);
+              }
+            });
+          }
+        });
+      })
+      .catch((err) => {
+        console.error("Error accessing media devices:", err);
+        setError("Error accessing media devices. Please check your permissions.");
       });
-    } else {
-      console.error("Media devices not available.");
-      alert("Media devices not available.");
-    }
+
+    return () => {
+      if (peerRef.current) {
+        peerRef.current.destroy();
+      }
+    };
   }, [roomId]);
+
+  if (!roomId) {
+    return <div>Loading...</div>; // Display a loading message until roomId is available
+  }
+
+  if (error) {
+    return <div>{error}</div>; // Display any error related to media devices
+  }
 
   return (
     <div className="flex flex-col justify-center items-center h-screen bg-gray-800">
