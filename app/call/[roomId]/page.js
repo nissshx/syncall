@@ -1,22 +1,22 @@
 "use client"
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useParams } from "next/navigation";
 import Peer from "simple-peer";
-import { database, ref, onValue, set, push } from "../firebase"; // Firebase utilities
+import { database, ref, onValue, set, push } from "../../../utils/firebase"; // Firebase utilities
 
 export default function VideoCall() {
   const userVideo = useRef();
   const partnerVideo = useRef();
   const peerRef = useRef();
   const router = useRouter();
-  const [roomId, setRoomId] = useState(null); // Local state for roomId
+  const { roomId } = useParams();  // Get roomId from useParams
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    if (router.query.roomId) {
-      setRoomId(router.query.roomId); // Set roomId from query when available
+    if (roomId) {
+      console.log("Room ID:", roomId);  // Debugging line
     }
-  }, [router.query.roomId]);
+  }, [roomId]);
 
   useEffect(() => {
     if (!roomId) return;
@@ -24,45 +24,50 @@ export default function VideoCall() {
     const roomRef = ref(database, `rooms/${roomId}`);
 
     // Access the user's webcam and mic
-    navigator.mediaDevices
-      .getUserMedia({ video: true, audio: true })
-      .then((stream) => {
-        userVideo.current.srcObject = stream;
+    if (typeof window !== "undefined" && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices
+        .getUserMedia({ video: true, audio: true })
+        .then((stream) => {
+          userVideo.current.srcObject = stream;
 
-        const peer = new Peer({
-          initiator: false,
-          trickle: false,
-          stream: stream,
+          const peer = new Peer({
+            initiator: false,
+            trickle: false,
+            stream: stream,
+          });
+
+          peer.on("signal", (signal) => {
+            // Save signal data to Firebase
+            const signalRef = push(ref(database, `rooms/${roomId}/signals`));
+            set(signalRef, { signal, type: "offer" });
+          });
+
+          peer.on("stream", (partnerStream) => {
+            partnerVideo.current.srcObject = partnerStream;
+          });
+
+          peerRef.current = peer;
+
+          // Listen for signal data from Firebase
+          onValue(ref(database, `rooms/${roomId}/signals`), (snapshot) => {
+            const signals = snapshot.val();
+            if (signals) {
+              Object.values(signals).forEach(({ signal, type }) => {
+                if (type === "offer" && !peer.initiator) {
+                  peer.signal(signal);
+                }
+              });
+            }
+          });
+        })
+        .catch((err) => {
+          console.error("Error accessing media devices:", err);
+          setError("Error accessing media devices. Please check your permissions.");
         });
-
-        peer.on("signal", (signal) => {
-          // Save signal data to Firebase
-          const signalRef = push(ref(database, `rooms/${roomId}/signals`));
-          set(signalRef, { signal, type: "offer" });
-        });
-
-        peer.on("stream", (partnerStream) => {
-          partnerVideo.current.srcObject = partnerStream;
-        });
-
-        peerRef.current = peer;
-
-        // Listen for signal data from Firebase
-        onValue(ref(database, `rooms/${roomId}/signals`), (snapshot) => {
-          const signals = snapshot.val();
-          if (signals) {
-            Object.values(signals).forEach(({ signal, type }) => {
-              if (type === "offer" && !peer.initiator) {
-                peer.signal(signal);
-              }
-            });
-          }
-        });
-      })
-      .catch((err) => {
-        console.error("Error accessing media devices:", err);
-        setError("Error accessing media devices. Please check your permissions.");
-      });
+    } else {
+      console.error("Media devices not available.");
+      setError("Media devices not available.");
+    }
 
     return () => {
       if (peerRef.current) {
