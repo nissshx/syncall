@@ -1,4 +1,5 @@
-"use client"import { useEffect, useRef, useState } from "react";
+"use client"
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Peer from "simple-peer";
 import { database, ref, onValue, set, push } from "../firebase"; // Firebase utilities
